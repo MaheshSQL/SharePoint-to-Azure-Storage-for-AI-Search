@@ -1,0 +1,22 @@
+CREATE TABLE dbo.filemetadata (  
+    SharepointSiteAddress varchar(5000),
+    ItemInternalId varchar(500),
+    ID int NOT NULL,
+    Created_UTC Datetime2,
+    Modified_UTC Datetime2,
+    Identifier varchar(500),
+    [Name] varchar(500) NOT NULL,
+    FilenameWithExtension varchar(500) NOT NULL,
+    [Path] varchar(5000) NOT NULL,
+    [FullPath] varchar(5000) NOT NULL,
+    [Link] varchar(5000) NOT NULL,
+    DriveId varchar(500) NOT NULL,
+    DriveItemId varchar(500) NOT NULL,
+    VersionNumber varchar(100) NOT NULL,
+    ACL varchar(5000),
+    [_IsDeleted] bit,
+    [_IsRenamed] bit,
+    [_RecordCreatedOn_UTC] Datetime2,
+    [_RecordUpdatedOn_UTC] Datetime2,
+    CONSTRAINT PK_filemetadata PRIMARY KEY (DriveId, DriveItemId)  
+); 

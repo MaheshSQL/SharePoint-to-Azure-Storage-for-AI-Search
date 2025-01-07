@@ -1,0 +1,453 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "actions": {
+            "For_each_-_file": {
+                "type": "Foreach",
+                "foreach": "@triggerBody()",
+                "actions": {
+                    "Get_file_content": {
+                        "type": "ApiConnection",
+                        "inputs": {
+                            "host": {
+                                "connection": {
+                                    "referenceName": "sharepointonline"
+                                }
+                            },
+                            "method": "get",
+                            "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepoint_site_address')))}/files/@{encodeURIComponent(items('For_each_-_file')['{Identifier}'])}/content",
+                            "queries": {
+                                "inferContentType": true
+                            }
+                        }
+                    },
+                    "Send_an_HTTP_request_to_SharePoint_to_get_ACL": {
+                        "type": "ApiConnection",
+                        "inputs": {
+                            "host": {
+                                "connection": {
+                                    "referenceName": "sharepointonline"
+                                }
+                            },
+                            "method": "post",
+                            "body": {
+                                "method": "GET",
+                                "uri": "_api/web/lists('@{string(items('For_each_-_file')['AdditionalFields']['LibraryId'])}')/items('@{string(items('For_each_-_file')['ItemInternalId'])\r\n}')/roleassignments?$expand=Member/users,RoleDefinitionBindings"
+                            },
+                            "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepoint_site_address')))}/httprequest"
+                        }
+                    },
+                    "Create_blob_(V2)": {
+                        "type": "ApiConnection",
+                        "inputs": {
+                            "host": {
+                                "connection": {
+                                    "referenceName": "azureblob-1"
+                                }
+                            },
+                            "method": "post",
+                            "body": "@body('Get_file_content')",
+                            "headers": {
+                                "ReadFileMetadataFromServer": true
+                            },
+                            "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/files",
+                            "queries": {
+                                "folderPath": "@concat(\r\nparameters('blob_container_name'), \r\n'/',\r\nreplace(replace(replace(parameters('sharepoint_site_address'),'://','-'),'/','/'),'.','-'),\r\n'/'\r\n,\r\nitems('For_each_-_file')['{Path}']\r\n)",
+                                "name": "@items('For_each_-_file')['{FilenameWithExtension}']",
+                                "queryParametersSingleEncoded": true
+                            }
+                        },
+                        "runAfter": {
+                            "Get_file_content": [
+                                "SUCCEEDED"
+                            ]
+                        },
+                        "runtimeConfiguration": {
+                            "contentTransfer": {
+                                "transferMode": "Chunked"
+                            }
+                        }
+                    },
+                    "Create_blob_(V2)_-_File_metadata": {
+                        "type": "ApiConnection",
+                        "inputs": {
+                            "host": {
+                                "connection": {
+                                    "referenceName": "azureblob-1"
+                                }
+                            },
+                            "method": "post",
+                            "body": "@string(items('For_each_-_file'))",
+                            "headers": {
+                                "ReadFileMetadataFromServer": true
+                            },
+                            "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/files",
+                            "queries": {
+                                "folderPath": "@concat(\r\nparameters('blob_container_name_metadata'), \r\n'/',\r\nreplace(replace(replace(parameters('sharepoint_site_address'),'://','-'),'/','/'),'.','-'),\r\n'/'\r\n,\r\nitems('For_each_-_file')['{Path}']\r\n)",
+                                "name": "@concat(\r\nitems('For_each_-_file')['{FilenameWithExtension}'],\r\n'.json'\r\n)",
+                                "queryParametersSingleEncoded": true
+                            }
+                        },
+                        "runtimeConfiguration": {
+                            "contentTransfer": {
+                                "transferMode": "Chunked"
+                            }
+                        }
+                    },
+                    "Execute_JavaScript_Code_-_Extract_ACL": {
+                        "type": "JavaScriptCode",
+                        "inputs": {
+                            "code": "var data = workflowContext.actions.Send_an_HTTP_request_to_SharePoint_to_get_ACL.outputs.body.d;\r\n\r\nconst limitedAccessRoleNames = ['Full Control','Edit','Read','Contribute','Restricted View']; \r\nvar emailAddresses = [];  \r\n  \r\n// Iterate over each role assignment  \r\ndata.results.forEach(roleAssignment => {  \r\n    const roleDefinitions = roleAssignment.RoleDefinitionBindings.results;  \r\n    const hasAccess = roleDefinitions.some(role => limitedAccessRoleNames.includes(role.Name));  \r\n  \r\n    if (hasAccess) {  \r\n        const member = roleAssignment.Member;  \r\n  \r\n        // Check if the member is a group  \r\n        if (member.PrincipalType === 8) {  \r\n            member.Users.results.forEach(user => {  \r\n                if (user.Email) {  \r\n                    emailAddresses.push(user.Email);  \r\n                }  \r\n            });  \r\n        } else if (member.PrincipalType === 1) { // Check if the member is a user  \r\n            if (member.Email) {  \r\n                emailAddresses.push(member.Email);  \r\n            }  \r\n        }  \r\n    }  \r\n});  \r\n\r\nemailAddressesUnique = [...new Set(emailAddresses)]\r\n\r\nconsole.log(emailAddressesUnique);\r\n// Return comma separated values\r\nreturn emailAddressesUnique.join(',')"
+                        },
+                        "runAfter": {
+                            "Send_an_HTTP_request_to_SharePoint_to_get_ACL": [
+                                "SUCCEEDED"
+                            ]
+                        }
+                    },
+                    "Create_blob_(V2)_-_ACL": {
+                        "type": "ApiConnection",
+                        "inputs": {
+                            "host": {
+                                "connection": {
+                                    "referenceName": "azureblob-1"
+                                }
+                            },
+                            "method": "post",
+                            "body": "@string(body('Send_an_HTTP_request_to_SharePoint_to_get_ACL'))",
+                            "headers": {
+                                "ReadFileMetadataFromServer": true
+                            },
+                            "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/files",
+                            "queries": {
+                                "folderPath": "@concat(\r\nparameters('blob_container_name_acl'), \r\n'/',\r\nreplace(replace(replace(parameters('sharepoint_site_address'),'://','-'),'/','/'),'.','-'),\r\n'/'\r\n,\r\nitems('For_each_-_file')['{Path}']\r\n)",
+                                "name": "@concat(\r\nitems('For_each_-_file')['{FilenameWithExtension}'],\r\n'.json'\r\n)",
+                                "queryParametersSingleEncoded": true
+                            }
+                        },
+                        "runAfter": {
+                            "Execute_JavaScript_Code_-_Extract_ACL": [
+                                "SUCCEEDED"
+                            ]
+                        },
+                        "runtimeConfiguration": {
+                            "contentTransfer": {
+                                "transferMode": "Chunked"
+                            }
+                        }
+                    },
+                    "Execute_a_SQL_query_(V2)_-_New_or_not_exists": {
+                        "type": "ApiConnection",
+                        "inputs": {
+                            "host": {
+                                "connection": {
+                                    "referenceName": "sql"
+                                }
+                            },
+                            "method": "post",
+                            "body": {
+                                "query": "SELECT \nCOUNT(*) AS FileExists\nFROM [dbo].[filemetadata] \nWHERE \n[DriveId] = @DriveId AND \n[DriveItemId] = @DriveItemId AND\n[SharepointSiteAddress] = @SharepointSiteAddress",
+                                "formalParameters": {
+                                    "DriveId": "VARCHAR(500)",
+                                    "DriveItemId": "VARCHAR(500)",
+                                    "SharepointSiteAddress": "VARCHAR(5000)"
+                                },
+                                "actualParameters": {
+                                    "DriveId": "@items('For_each_-_file')['{DriveId}']",
+                                    "DriveItemId": "@items('For_each_-_file')['{DriveItemId}']",
+                                    "SharepointSiteAddress": "@parameters('sharepoint_site_address')"
+                                }
+                            },
+                            "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/query/sql"
+                        },
+                        "runAfter": {
+                            "Create_blob_(V2)_-_ACL": [
+                                "SUCCEEDED"
+                            ],
+                            "Create_blob_(V2)": [
+                                "SUCCEEDED"
+                            ],
+                            "Create_blob_(V2)_-_File_metadata": [
+                                "SUCCEEDED"
+                            ]
+                        }
+                    },
+                    "Condition_-_newly_added_or_not-copy": {
+                        "type": "If",
+                        "expression": {
+                            "and": [
+                                {
+                                    "equals": [
+                                        "@body('Execute_a_SQL_query_(V2)_-_New_or_not_exists')?['resultsets']?['Table1']?[0]?['FileExists']",
+                                        0
+                                    ]
+                                }
+                            ]
+                        },
+                        "actions": {
+                            "Insert_row_(V2)_-_Add_filemetadata_record": {
+                                "type": "ApiConnection",
+                                "inputs": {
+                                    "host": {
+                                        "connection": {
+                                            "referenceName": "sql"
+                                        }
+                                    },
+                                    "method": "post",
+                                    "body": {
+                                        "ID": "@items('For_each_-_file')['ID']",
+                                        "Name": "@items('For_each_-_file')['{Name}']",
+                                        "FilenameWithExtension": "@items('For_each_-_file')['{FilenameWithExtension}']",
+                                        "Path": "@items('For_each_-_file')['{Path}']",
+                                        "FullPath": "@items('For_each_-_file')['{FullPath}']",
+                                        "Link": "@items('For_each_-_file')['{Link}']",
+                                        "DriveId": "@items('For_each_-_file')['{DriveId}']",
+                                        "DriveItemId": "@items('For_each_-_file')['{DriveItemId}']",
+                                        "VersionNumber": "@items('For_each_-_file')['{VersionNumber}']",
+                                        "SharepointSiteAddress": "@parameters('sharepoint_site_address')",
+                                        "ItemInternalId": "@string(items('For_each_-_file')['ItemInternalId'])",
+                                        "Created_UTC": "@items('For_each_-_file')['Created']",
+                                        "Modified_UTC": "@items('For_each_-_file')['Modified']",
+                                        "Identifier": "@items('For_each_-_file')['{Identifier}']",
+                                        "ACL": "@outputs('Execute_JavaScript_Code_-_Extract_ACL')",
+                                        "_IsDeleted": false,
+                                        "_IsRenamed": false,
+                                        "_RecordCreatedOn_UTC": "@utcNow()",
+                                        "_RecordUpdatedOn_UTC": "@null"
+                                    },
+                                    "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/tables/@{encodeURIComponent(encodeURIComponent('[dbo].[filemetadata]'))}/items"
+                                }
+                            }
+                        },
+                        "else": {
+                            "actions": {
+                                "Condition_-_renamed_(true)_or_modified_(false)": {
+                                    "type": "If",
+                                    "expression": {
+                                        "and": [
+                                            {
+                                                "not": {
+                                                    "equals": [
+                                                        "@body('Execute_a_SQL_query_(V2)_-_Get_metadata')?['resultsets']?['Table1']?[0]?['FilenameWithExtension']",
+                                                        "@items('For_each_-_file')['{FilenameWithExtension}']"
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    "actions": {
+                                        "Execute_a_SQL_query_(V2)_-_Update_row_renamed": {
+                                            "type": "ApiConnection",
+                                            "inputs": {
+                                                "host": {
+                                                    "connection": {
+                                                        "referenceName": "sql"
+                                                    }
+                                                },
+                                                "method": "post",
+                                                "body": {
+                                                    "query": "UPDATE [dbo].[filemetadata]\nSET \n[Identifier] = @Identifier,\n[Name] =@Name,\n[FilenameWithExtension] = @FilenameWithExtension,\n[Path] = @Path,\n[FullPath] = @FullPath,\n[Link] = @Link,\n[VersionNumber] = @VersionNumber,\n[_IsRenamed] = @IsRenamed,\n[_RecordUpdatedOn_UTC] = CONVERT(DATETIME, @RecordUpdatedOn_UTC, 127),\n[_IsDeleted] = 0,\n[ACL]=@ACL\nWHERE\n[DriveId] = @DriveId AND\n[DriveItemId] = @DriveItemId AND\n[SharepointSiteAddress] = @SharepointSiteAddress",
+                                                    "formalParameters": {
+                                                        "IsRenamed": "bit",
+                                                        "RecordUpdatedOn_UTC": "VARCHAR(27)",
+                                                        "DriveId": "varchar(500)",
+                                                        "DriveItemId": "varchar(500)",
+                                                        "Name": "varchar(500)",
+                                                        "FilenameWithExtension": "varchar(500)",
+                                                        "Path": "varchar(5000)",
+                                                        "FullPath": "varchar(5000)",
+                                                        "Link": "varchar(5000)",
+                                                        "VersionNumber": "varchar(100)",
+                                                        "Identifier": "varchar(500)",
+                                                        "SharepointSiteAddress": "varchar(5000)",
+                                                        "ACL": "varchar(5000)"
+                                                    },
+                                                    "actualParameters": {
+                                                        "IsRenamed": true,
+                                                        "RecordUpdatedOn_UTC": "@formatDateTime(utcNow(),'yyyy-MM-ddTHH:mm:ss')",
+                                                        "DriveId": "@items('For_each_-_file')['{DriveId}']",
+                                                        "DriveItemId": "@items('For_each_-_file')['{DriveItemId}']",
+                                                        "Name": "@items('For_each_-_file')['{Name}']",
+                                                        "FilenameWithExtension": "@items('For_each_-_file')['{FilenameWithExtension}']",
+                                                        "Path": "@items('For_each_-_file')['{Path}']",
+                                                        "FullPath": "@items('For_each_-_file')['{FullPath}']",
+                                                        "Link": "@items('For_each_-_file')['{Link}']",
+                                                        "VersionNumber": "@items('For_each_-_file')['{VersionNumber}']",
+                                                        "Identifier": "@items('For_each_-_file')['{Identifier}']",
+                                                        "SharepointSiteAddress": "@parameters('sharepoint_site_address')",
+                                                        "ACL": "@outputs('Execute_JavaScript_Code_-_Extract_ACL')"
+                                                    }
+                                                },
+                                                "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/query/sql"
+                                            },
+                                            "runAfter": {
+                                                "Delete_blob_(V2)_-_Old_file": [
+                                                    "SUCCEEDED"
+                                                ],
+                                                "Delete_blob_(V2)_-_Old_ACL_file": [
+                                                    "SUCCEEDED"
+                                                ],
+                                                "Delete_blob_(V2)_-_Old_file_-_Metadata_file": [
+                                                    "SUCCEEDED"
+                                                ]
+                                            }
+                                        },
+                                        "Delete_blob_(V2)_-_Old_file": {
+                                            "type": "ApiConnection",
+                                            "inputs": {
+                                                "host": {
+                                                    "connection": {
+                                                        "referenceName": "azureblob-1"
+                                                    }
+                                                },
+                                                "method": "delete",
+                                                "headers": {
+                                                    "SkipDeleteIfFileNotFoundOnServer": false
+                                                },
+                                                "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/files/@{encodeURIComponent(encodeURIComponent(concat('/',parameters('blob_container_name'), '/',replace(replace(replace(parameters('sharepoint_site_address'),'://','-'),'/','/'),'.','-'),'/',body('Execute_a_SQL_query_(V2)_-_Get_metadata')?['resultsets']?['Table1'][0]['FullPath'])))}"
+                                            },
+                                            "metadata": {
+                                                "JTJmc2hhcmVwb2ludC1leHBvcnQlMmZodHRwcy1taWNyb3NvZnRhcGMtc2hhcmVwb2ludC1jb20lMmZ0ZWFtcyUyZnRlc3Qtc3Atc2l0ZTElMmZTaGFyZWQrRG9jdW1lbnRzJTJmQ29ubmVjdG9yX1N1bW1hcnkxMTZfbW9kLnBkZg==": "/sharepoint-export/https-microsoftapc-sharepoint-com/teams/test-sp-site1/Shared Documents/Connector_Summary116_mod.pdf"
+                                            }
+                                        },
+                                        "Delete_blob_(V2)_-_Old_ACL_file": {
+                                            "type": "ApiConnection",
+                                            "inputs": {
+                                                "host": {
+                                                    "connection": {
+                                                        "referenceName": "azureblob-1"
+                                                    }
+                                                },
+                                                "method": "delete",
+                                                "headers": {
+                                                    "SkipDeleteIfFileNotFoundOnServer": false
+                                                },
+                                                "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/files/@{encodeURIComponent(encodeURIComponent(concat('/',parameters('blob_container_name_acl'), '/',replace(replace(replace(parameters('sharepoint_site_address'),'://','-'),'/','/'),'.','-'),'/',body('Execute_a_SQL_query_(V2)_-_Get_metadata')?['resultsets']?['Table1'][0]['FullPath'],'.json')))}"
+                                            },
+                                            "metadata": {
+                                                "JTJmc2hhcmVwb2ludC1leHBvcnQlMmZodHRwcy1taWNyb3NvZnRhcGMtc2hhcmVwb2ludC1jb20lMmZ0ZWFtcyUyZnRlc3Qtc3Atc2l0ZTElMmZTaGFyZWQrRG9jdW1lbnRzJTJmQ29ubmVjdG9yX1N1bW1hcnkxMTZfbW9kLnBkZg==": "/sharepoint-export/https-microsoftapc-sharepoint-com/teams/test-sp-site1/Shared Documents/Connector_Summary116_mod.pdf"
+                                            }
+                                        },
+                                        "Delete_blob_(V2)_-_Old_file_-_Metadata_file": {
+                                            "type": "ApiConnection",
+                                            "inputs": {
+                                                "host": {
+                                                    "connection": {
+                                                        "referenceName": "azureblob-1"
+                                                    }
+                                                },
+                                                "method": "delete",
+                                                "headers": {
+                                                    "SkipDeleteIfFileNotFoundOnServer": false
+                                                },
+                                                "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/files/@{encodeURIComponent(encodeURIComponent(concat('/',parameters('blob_container_name_metadata'), '/',replace(replace(replace(parameters('sharepoint_site_address'),'://','-'),'/','/'),'.','-'),'/',body('Execute_a_SQL_query_(V2)_-_Get_metadata')?['resultsets']?['Table1'][0]['FullPath'],'.json')))}"
+                                            },
+                                            "metadata": {
+                                                "JTJmc2hhcmVwb2ludC1leHBvcnQlMmZodHRwcy1taWNyb3NvZnRhcGMtc2hhcmVwb2ludC1jb20lMmZ0ZWFtcyUyZnRlc3Qtc3Atc2l0ZTElMmZTaGFyZWQrRG9jdW1lbnRzJTJmQ29ubmVjdG9yX1N1bW1hcnkxMTZfbW9kLnBkZg==": "/sharepoint-export/https-microsoftapc-sharepoint-com/teams/test-sp-site1/Shared Documents/Connector_Summary116_mod.pdf"
+                                            }
+                                        }
+                                    },
+                                    "else": {
+                                        "actions": {
+                                            "Execute_a_SQL_query_(V2)_-_Update_row_modified": {
+                                                "type": "ApiConnection",
+                                                "inputs": {
+                                                    "host": {
+                                                        "connection": {
+                                                            "referenceName": "sql"
+                                                        }
+                                                    },
+                                                    "method": "post",
+                                                    "body": {
+                                                        "query": "UPDATE [dbo].[filemetadata]\nSET \n[_RecordUpdatedOn_UTC] = CONVERT(DATETIME, @RecordUpdatedOn_UTC, 127),\n[_IsDeleted] = 0,\n[ACL] = @ACL\nWHERE\n[DriveId] = @DriveId AND\n[DriveItemId] = @DriveItemId AND\n[SharepointSiteAddress] = @SharepointSiteAddress",
+                                                        "formalParameters": {
+                                                            "RecordUpdatedOn_UTC": "VARCHAR(27)",
+                                                            "DriveId": "varchar(500)",
+                                                            "DriveItemId": "varchar(500)",
+                                                            "SharepointSiteAddress": "varchar(5000)",
+                                                            "ACL": "varchar(5000)"
+                                                        },
+                                                        "actualParameters": {
+                                                            "RecordUpdatedOn_UTC": "@formatDateTime(utcNow(),'yyyy-MM-ddTHH:mm:ss')",
+                                                            "DriveId": "@items('For_each_-_file')['{DriveId}']",
+                                                            "DriveItemId": "@items('For_each_-_file')['{DriveItemId}']",
+                                                            "SharepointSiteAddress": "@parameters('sharepoint_site_address')",
+                                                            "ACL": "@outputs('Execute_JavaScript_Code_-_Extract_ACL')"
+                                                        }
+                                                    },
+                                                    "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/query/sql"
+                                                }
+                                            }
+                                        }
+                                    },
+                                    "runAfter": {
+                                        "Execute_a_SQL_query_(V2)_-_Get_metadata": [
+                                            "SUCCEEDED"
+                                        ]
+                                    }
+                                },
+                                "Execute_a_SQL_query_(V2)_-_Get_metadata": {
+                                    "type": "ApiConnection",
+                                    "inputs": {
+                                        "host": {
+                                            "connection": {
+                                                "referenceName": "sql"
+                                            }
+                                        },
+                                        "method": "post",
+                                        "body": {
+                                            "query": "SELECT \n[FilenameWithExtension],\n[FullPath]\nFROM [dbo].[filemetadata] \nWHERE \n[DriveId] = @DriveId AND \n[DriveItemId] = @DriveItemId AND\n[SharepointSiteAddress] = @SharepointSiteAddress",
+                                            "formalParameters": {
+                                                "DriveId": "VARCHAR(500)",
+                                                "DriveItemId": "VARCHAR(500)",
+                                                "SharepointSiteAddress": "VARCHAR(5000)"
+                                            },
+                                            "actualParameters": {
+                                                "DriveId": "@items('For_each_-_file')['{DriveId}']",
+                                                "DriveItemId": "@items('For_each_-_file')['{DriveItemId}']",
+                                                "SharepointSiteAddress": "@parameters('sharepoint_site_address')"
+                                            }
+                                        },
+                                        "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/query/sql"
+                                    }
+                                }
+                            }
+                        },
+                        "runAfter": {
+                            "Execute_a_SQL_query_(V2)_-_New_or_not_exists": [
+                                "SUCCEEDED"
+                            ]
+                        }
+                    }
+                },
+                "runAfter": {},
+                "runtimeConfiguration": {
+                    "concurrency": {
+                        "repetitions": 40
+                    }
+                }
+            },
+            "Response_-_200": {
+                "type": "Response",
+                "kind": "Http",
+                "inputs": {
+                    "statusCode": 200
+                },
+                "runAfter": {
+                    "For_each_-_file": [
+                        "SUCCEEDED"
+                    ]
+                }
+            }
+        },
+        "contentVersion": "1.0.0.0",
+        "outputs": {},
+        "triggers": {
+            "When_a_HTTP_request_is_received": {
+                "type": "Request",
+                "kind": "Http"
+            }
+        }
+    },
+    "kind": "Stateful"
+}

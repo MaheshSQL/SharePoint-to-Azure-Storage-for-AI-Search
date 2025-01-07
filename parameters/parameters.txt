@@ -1,0 +1,34 @@
+{
+    "blob_container_name": {
+        "type": "String",
+        "value": "sharepoint-export"
+    },
+    "blob_container_name_acl": {
+        "type": "String",
+        "value": "sharepoint-acl"
+    },
+    "blob_container_name_metadata": {
+        "type": "String",
+        "value": "sharepoint-metadata"
+    },
+    "blob_load_history_container_name": {
+        "type": "String",
+        "value": "load-history"
+    },
+    "blob_load_history_file_name": {
+        "type": "String",
+        "value": "blob-history.txt"
+    },
+    "file_group_count": {
+        "type": "Int",
+        "value": 40
+    },
+    "increment_by_days": {
+        "type": "Int",
+        "value": 10
+    },
+    "sharepoint_site_address": {
+        "type": "String",
+        "value": "https://XXXXX.sharepoint.com/XXXXX"
+    }
+}

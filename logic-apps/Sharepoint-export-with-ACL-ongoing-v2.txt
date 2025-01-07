@@ -1,0 +1,324 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "actions": {
+            "Get_all_lists_and_libraries": {
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": {
+                        "connection": {
+                            "referenceName": "sharepointonline"
+                        }
+                    },
+                    "method": "get",
+                    "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepoint_site_address')))}/alltables"
+                },
+                "runAfter": {
+                    "Set_variable_-_from_date": [
+                        "SUCCEEDED"
+                    ]
+                }
+            },
+            "For_each_-_Document_Library_and_List": {
+                "type": "Foreach",
+                "foreach": "@body('Get_all_lists_and_libraries')?['value']",
+                "actions": {
+                    "Condition_-_Check_if_Document_Library": {
+                        "type": "If",
+                        "expression": {
+                            "and": [
+                                {
+                                    "equals": [
+                                        "@string(items('For_each_-_Document_Library_and_List')['Type'])",
+                                        "@string(101)"
+                                    ]
+                                }
+                            ]
+                        },
+                        "actions": {
+                            "Get_files_properties_only": {
+                                "type": "ApiConnection",
+                                "inputs": {
+                                    "host": {
+                                        "connection": {
+                                            "referenceName": "sharepointonline"
+                                        }
+                                    },
+                                    "method": "get",
+                                    "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepoint_site_address')))}/tables/@{encodeURIComponent(encodeURIComponent(items('For_each_-_Document_Library_and_List')['DisplayName']))}/getfileitems",
+                                    "queries": {
+                                        "$filter": "(Created gt '@{variables('from_date_time_UTC')}' and Created le '@{variables('to_date_time_UTC')}' ) or\n(Modified gt '@{variables('from_date_time_UTC')}' and Modified le '@{variables('to_date_time_UTC')}' )",
+                                        "$top": 5000,
+                                        "viewScopeOption": "RecursiveAll"
+                                    }
+                                }
+                            },
+                            "Set_variable_-_files_to_process": {
+                                "type": "SetVariable",
+                                "inputs": {
+                                    "name": "files_to_process",
+                                    "value": "@if(\r\ngreater(length(outputs('Execute_JavaScript_Code_-_Keep_only_files')) , 0)\r\n,\r\nunion(\r\nvariables('files_to_process_temp'), \r\noutputs('Execute_JavaScript_Code_-_Keep_only_files')),\r\n\r\nvariables('files_to_process_temp')\r\n)\r\n"
+                                },
+                                "runAfter": {
+                                    "Execute_JavaScript_Code_-_Keep_only_files": [
+                                        "SUCCEEDED"
+                                    ]
+                                }
+                            },
+                            "Set_variable_-_files_to_process_temp": {
+                                "type": "SetVariable",
+                                "inputs": {
+                                    "name": "files_to_process_temp",
+                                    "value": "@variables('files_to_process')"
+                                },
+                                "runAfter": {
+                                    "Set_variable_-_files_to_process": [
+                                        "SUCCEEDED"
+                                    ]
+                                }
+                            },
+                            "Execute_JavaScript_Code_-_Keep_only_files": {
+                                "type": "JavaScriptCode",
+                                "inputs": {
+                                    "code": "var get_files_output = workflowContext.actions.Get_files_properties_only.outputs.body.value;\r\n\r\nvar additional_fields = workflowContext.actions.Compose_to_get_library_name.outputs\r\n\r\n// Initialize an empty array\r\nvar resultArray = [];\r\n\r\n// Iterate through each item in the JSON array\r\nget_files_output.forEach(function(item) {\r\n    //Check if this is a file, not a folder\r\n    if (!item['{IsFolder}']) {    \r\n\r\n    item_new = item;\r\n    item_new['AdditionalFields'] = additional_fields;\r\n\r\n    resultArray.push(item_new);\r\n    }\r\n});\r\n\r\n// Output the result array\r\nreturn resultArray;"
+                                },
+                                "runAfter": {
+                                    "Compose_to_get_library_name": [
+                                        "SUCCEEDED"
+                                    ]
+                                }
+                            },
+                            "Compose_to_get_library_name": {
+                                "type": "Compose",
+                                "inputs": {
+                                    "LibraryId": "@items('For_each_-_Document_Library_and_List')['Name']",
+                                    "LibraryName": "@items('For_each_-_Document_Library_and_List')['DisplayName']",
+                                    "from_date_time_UTC": "@variables('from_date_time_UTC')",
+                                    "to_date_time_UTC": "@variables('to_date_time_UTC')"
+                                },
+                                "runAfter": {
+                                    "Get_files_properties_only": [
+                                        "SUCCEEDED"
+                                    ]
+                                }
+                            }
+                        },
+                        "else": {
+                            "actions": {}
+                        }
+                    }
+                },
+                "runAfter": {
+                    "Initialize_variable_-_files_to_process_chunks": [
+                        "SUCCEEDED"
+                    ]
+                },
+                "runtimeConfiguration": {
+                    "concurrency": {
+                        "repetitions": 1
+                    }
+                }
+            },
+            "Get_blob_content_(V2)_-_Load_history": {
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": {
+                        "connection": {
+                            "referenceName": "azureblob-1"
+                        }
+                    },
+                    "method": "get",
+                    "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/files/@{encodeURIComponent(encodeURIComponent(concat(parameters('blob_load_history_container_name'),'/',parameters('blob_load_history_file_name'))))}/content",
+                    "queries": {
+                        "inferContentType": true
+                    }
+                },
+                "runAfter": {
+                    "Initialize_variable_-_to_date": [
+                        "SUCCEEDED"
+                    ]
+                }
+            },
+            "Initialize_variable_-_from_date": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "from_date_time_UTC",
+                            "type": "string",
+                            "value": "2024-12-01T00:00:00Z"
+                        }
+                    ]
+                },
+                "runAfter": {}
+            },
+            "Initialize_variable_-_to_date": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "to_date_time_UTC",
+                            "type": "string",
+                            "value": "@utcNow()"
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Initialize_variable_-_from_date": [
+                        "SUCCEEDED"
+                    ]
+                }
+            },
+            "Set_variable_-_from_date": {
+                "type": "SetVariable",
+                "inputs": {
+                    "name": "from_date_time_UTC",
+                    "value": "@{body('Get_blob_content_(V2)_-_Load_history')}"
+                },
+                "runAfter": {
+                    "Get_blob_content_(V2)_-_Load_history": [
+                        "SUCCEEDED"
+                    ]
+                }
+            },
+            "Initialize_variable_-_files_to_process": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "files_to_process",
+                            "type": "array",
+                            "value": []
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Get_all_lists_and_libraries": [
+                        "SUCCEEDED"
+                    ]
+                }
+            },
+            "For_each_-_file_artefact": {
+                "type": "Foreach",
+                "foreach": "@variables('files_to_process_chunks')",
+                "actions": {
+                    "Invoke_a_workflow_in_this_workflow_app": {
+                        "type": "Workflow",
+                        "inputs": {
+                            "host": {
+                                "workflow": {
+                                    "id": "Sharepoint-export-with-ACL-ongoing-v2-childflow"
+                                }
+                            },
+                            "body": "@items('For_each_-_file_artefact')"
+                        }
+                    }
+                },
+                "runAfter": {
+                    "Set_variable_-_files_to_process_chunks": [
+                        "SUCCEEDED"
+                    ]
+                },
+                "runtimeConfiguration": {
+                    "concurrency": {
+                        "repetitions": 50
+                    }
+                }
+            },
+            "Initialize_variable_-_files_to_process_temp": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "files_to_process_temp",
+                            "type": "array",
+                            "value": []
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Initialize_variable_-_files_to_process": [
+                        "SUCCEEDED"
+                    ]
+                }
+            },
+            "Initialize_variable_-_files_to_process_chunks": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "files_to_process_chunks",
+                            "type": "array",
+                            "value": []
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Initialize_variable_-_files_to_process_temp": [
+                        "SUCCEEDED"
+                    ]
+                }
+            },
+            "Set_variable_-_files_to_process_chunks": {
+                "type": "SetVariable",
+                "inputs": {
+                    "name": "files_to_process_chunks",
+                    "value": "@chunk(variables('files_to_process'), parameters('file_group_count'))"
+                },
+                "runAfter": {
+                    "For_each_-_Document_Library_and_List": [
+                        "SUCCEEDED"
+                    ]
+                }
+            },
+            "Create_blob_(V2)_-_Save_to_date": {
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": {
+                        "connection": {
+                            "referenceName": "azureblob-1"
+                        }
+                    },
+                    "method": "post",
+                    "body": "@variables('to_date_time_UTC')",
+                    "headers": {
+                        "ReadFileMetadataFromServer": true
+                    },
+                    "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/files",
+                    "queries": {
+                        "folderPath": "@{'load-history'}",
+                        "name": "@parameters('blob_load_history_file_name')",
+                        "queryParametersSingleEncoded": true
+                    }
+                },
+                "runAfter": {
+                    "For_each_-_file_artefact": [
+                        "SUCCEEDED"
+                    ]
+                },
+                "runtimeConfiguration": {
+                    "contentTransfer": {
+                        "transferMode": "Chunked"
+                    }
+                }
+            }
+        },
+        "contentVersion": "1.0.0.0",
+        "outputs": {},
+        "triggers": {
+            "Recurrence_-_Every_day_or_xx_hours": {
+                "type": "Recurrence",
+                "recurrence": {
+                    "interval": 12,
+                    "frequency": "Month"
+                },
+                "runtimeConfiguration": {
+                    "concurrency": {
+                        "runs": 1
+                    }
+                }
+            }
+        }
+    },
+    "kind": "Stateful"
+}
