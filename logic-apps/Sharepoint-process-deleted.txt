@@ -1,0 +1,273 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "actions": {
+            "Send_an_HTTP_request_to_SharePoint_-_Get_Recycle_Bin_Items": {
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": {
+                        "connection": {
+                            "referenceName": "sharepointonline"
+                        }
+                    },
+                    "method": "post",
+                    "body": {
+                        "method": "GET",
+                        "uri": "_api/web/recyclebin"
+                    },
+                    "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepoint_site_address')))}/httprequest"
+                },
+                "runAfter": {
+                    "Initialize_variable_-_file_blob_path": [
+                        "SUCCEEDED"
+                    ]
+                }
+            },
+            "For_each_-_Deleted_file_in_recycle_bin": {
+                "type": "Foreach",
+                "foreach": "@body('Send_an_HTTP_request_to_SharePoint_-_Get_Recycle_Bin_Items')['d']['results']",
+                "actions": {
+                    "Set_variable_-_Reset_file_blob_path": {
+                        "type": "SetVariable",
+                        "inputs": {
+                            "name": "file_blob_path",
+                            "value": "''"
+                        }
+                    },
+                    "Set_variable_-_file_blob_parent_path": {
+                        "type": "SetVariable",
+                        "inputs": {
+                            "name": "file_blob_parent_path",
+                            "value": "@replace(items('For_each_-_Deleted_file_in_recycle_bin')['DirName'],\r\n\r\nsubstring(\r\nparameters('sharepoint_site_address'),\r\n\r\nadd(indexOf(\r\nreplace(parameters('sharepoint_site_address'), '//', '##'),\r\n'/'),1),\r\n\r\nsub(\r\nlength(parameters('sharepoint_site_address')) \r\n ,\r\nadd(indexOf(\r\nreplace(parameters('sharepoint_site_address'), '//', '##'),\r\n'/'),1)\r\n )\r\n),\r\n\r\n''\r\n)"
+                        },
+                        "runAfter": {
+                            "Set_variable_-_Reset_file_blob_parent_path": [
+                                "SUCCEEDED"
+                            ]
+                        }
+                    },
+                    "Set_variable_-_file_blob_path": {
+                        "type": "SetVariable",
+                        "inputs": {
+                            "name": "file_blob_path",
+                            "value": "@concat(\r\nvariables('file_blob_parent_path'),\r\n'/',\r\nitems('For_each_-_Deleted_file_in_recycle_bin')['Title']\r\n)"
+                        },
+                        "runAfter": {
+                            "Set_variable_-_file_blob_parent_path": [
+                                "SUCCEEDED"
+                            ]
+                        }
+                    },
+                    "Set_variable_-_Reset_file_blob_parent_path": {
+                        "type": "SetVariable",
+                        "inputs": {
+                            "name": "file_blob_parent_path",
+                            "value": "''"
+                        },
+                        "runAfter": {
+                            "Set_variable_-_Reset_file_blob_path": [
+                                "SUCCEEDED"
+                            ]
+                        }
+                    },
+                    "Execute_a_SQL_query_(V2)_-_Get_file_metadata": {
+                        "type": "ApiConnection",
+                        "inputs": {
+                            "host": {
+                                "connection": {
+                                    "referenceName": "sql"
+                                }
+                            },
+                            "method": "post",
+                            "body": {
+                                "query": "\n--Exists and deleted = 2 (skip)\n--Exists and not deleted = 1 (Handle delete)\n--Does not exist and not deleted = 0 (skip) \n\nSELECT SUM(DeletedPreviously) AS DeletedPreviously FROM\n(\n\tSELECT COUNT(*) AS DeletedPreviously\n\tFROM [dbo].[filemetadata]\n\tWHERE \n\t[SharepointSiteAddress] = @SharepointSiteAddress AND\n\t[FullPath] = @FullPath AND\n\t[_IsDeleted] = 1\n\n\tUNION ALL\n\n\tSELECT COUNT(*) AS DeletedPreviously\n\tFROM [dbo].[filemetadata]\n\tWHERE \n\t[SharepointSiteAddress] = @SharepointSiteAddress AND\n\t[FullPath] = @FullPath \n) AS AA",
+                                "formalParameters": {
+                                    "FullPath": "varchar(5000)",
+                                    "SharepointSiteAddress": "varchar(5000)"
+                                },
+                                "actualParameters": {
+                                    "FullPath": "@substring(\r\n          variables('file_blob_path'),\r\n          1,\r\n          sub(length(variables('file_blob_path')),1)\r\n)",
+                                    "SharepointSiteAddress": "@parameters('sharepoint_site_address')"
+                                }
+                            },
+                            "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/query/sql"
+                        },
+                        "runAfter": {
+                            "Set_variable_-_file_blob_path": [
+                                "SUCCEEDED"
+                            ]
+                        }
+                    },
+                    "Condition_-_Check_if_already_deleted_before_from_table": {
+                        "type": "If",
+                        "expression": {
+                            "or": [
+                                {
+                                    "equals": [
+                                        "@body('Execute_a_SQL_query_(V2)_-_Get_file_metadata')?['resultsets']?['Table1'][0]['DeletedPreviously']",
+                                        2
+                                    ]
+                                },
+                                {
+                                    "equals": [
+                                        "@body('Execute_a_SQL_query_(V2)_-_Get_file_metadata')?['resultsets']?['Table1'][0]['DeletedPreviously']",
+                                        0
+                                    ]
+                                }
+                            ]
+                        },
+                        "actions": {},
+                        "else": {
+                            "actions": {
+                                "Delete_blob_(V2)_-_Content_file": {
+                                    "type": "ApiConnection",
+                                    "inputs": {
+                                        "host": {
+                                            "connection": {
+                                                "referenceName": "azureblob-1"
+                                            }
+                                        },
+                                        "method": "delete",
+                                        "headers": {
+                                            "SkipDeleteIfFileNotFoundOnServer": false
+                                        },
+                                        "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/files/@{encodeURIComponent(encodeURIComponent(concat(       '/',       parameters('blob_container_name'),        '/',               replace(           replace(               replace(                    parameters('sharepoint_site_address'),'://','-'),                    '/','/'),                    '.','-'),               variables('file_blob_path')     )))}"
+                                    },
+                                    "metadata": {
+                                        "JTJmc2hhcmVwb2ludC1leHBvcnQlMmZodHRwcy1taWNyb3NvZnRhcGMtc2hhcmVwb2ludC1jb20tdGVhbXMtdGVzdC1zcC1zaXRlMSUyZlNoYXJlZCtEb2N1bWVudHMlMmZDb25uZWN0b3JfU3VtbWFyeS5wZGY=": "/sharepoint-export/https-microsoftapc-sharepoint-com-teams-test-sp-site1/Shared Documents/Connector_Summary.pdf"
+                                    }
+                                },
+                                "Execute_a_SQL_query_(V2)_-_Update_row_deleted": {
+                                    "type": "ApiConnection",
+                                    "inputs": {
+                                        "host": {
+                                            "connection": {
+                                                "referenceName": "sql"
+                                            }
+                                        },
+                                        "method": "post",
+                                        "body": {
+                                            "query": "UPDATE [dbo].[filemetadata]\nSET \n[_IsDeleted] = @IsDeleted,\n[_RecordUpdatedOn_UTC] = CONVERT(DATETIME, @RecordUpdatedOn_UTC, 127)\nWHERE\n[SharepointSiteAddress] = @SharepointSiteAddress AND\n[FullPath] = @FullPath",
+                                            "formalParameters": {
+                                                "IsDeleted": "bit",
+                                                "RecordUpdatedOn_UTC": "VARCHAR(27)",
+                                                "FullPath": "varchar(5000)",
+                                                "SharepointSiteAddress": "varchar(5000)"
+                                            },
+                                            "actualParameters": {
+                                                "IsDeleted": true,
+                                                "RecordUpdatedOn_UTC": "@formatDateTime(utcNow(),'yyyy-MM-ddTHH:mm:ss')",
+                                                "FullPath": "@substring(\r\n          variables('file_blob_path'),\r\n          1,\r\n          sub(length(variables('file_blob_path')),1)\r\n)",
+                                                "SharepointSiteAddress": "@parameters('sharepoint_site_address')"
+                                            }
+                                        },
+                                        "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/query/sql"
+                                    },
+                                    "runAfter": {
+                                        "Delete_blob_(V2)_-_Content_file": [
+                                            "SUCCEEDED"
+                                        ],
+                                        "Delete_blob_(V2)-_ACL_file": [
+                                            "SUCCEEDED"
+                                        ],
+                                        "Delete_blob_(V2)_-_Metadata_file": [
+                                            "SUCCEEDED"
+                                        ]
+                                    }
+                                },
+                                "Delete_blob_(V2)-_ACL_file": {
+                                    "type": "ApiConnection",
+                                    "inputs": {
+                                        "host": {
+                                            "connection": {
+                                                "referenceName": "azureblob-1"
+                                            }
+                                        },
+                                        "method": "delete",
+                                        "headers": {
+                                            "SkipDeleteIfFileNotFoundOnServer": false
+                                        },
+                                        "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/files/@{encodeURIComponent(encodeURIComponent(concat(       '/',       parameters('blob_container_name_acl'),        '/',               replace(           replace(               replace(                    parameters('sharepoint_site_address'),'://','-'),                    '/','/'),                    '.','-'),               variables('file_blob_path'),'.json'     )))}"
+                                    },
+                                    "metadata": {
+                                        "JTJmc2hhcmVwb2ludC1leHBvcnQlMmZodHRwcy1taWNyb3NvZnRhcGMtc2hhcmVwb2ludC1jb20tdGVhbXMtdGVzdC1zcC1zaXRlMSUyZlNoYXJlZCtEb2N1bWVudHMlMmZDb25uZWN0b3JfU3VtbWFyeS5wZGY=": "/sharepoint-export/https-microsoftapc-sharepoint-com-teams-test-sp-site1/Shared Documents/Connector_Summary.pdf"
+                                    }
+                                },
+                                "Delete_blob_(V2)_-_Metadata_file": {
+                                    "type": "ApiConnection",
+                                    "inputs": {
+                                        "host": {
+                                            "connection": {
+                                                "referenceName": "azureblob-1"
+                                            }
+                                        },
+                                        "method": "delete",
+                                        "headers": {
+                                            "SkipDeleteIfFileNotFoundOnServer": false
+                                        },
+                                        "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/files/@{encodeURIComponent(encodeURIComponent(concat(       '/',       parameters('blob_container_name_metadata'),        '/',               replace(           replace(               replace(                    parameters('sharepoint_site_address'),'://','-'),                    '/','/'),                    '.','-'),               variables('file_blob_path'),'.json'     )))}"
+                                    },
+                                    "metadata": {
+                                        "JTJmc2hhcmVwb2ludC1leHBvcnQlMmZodHRwcy1taWNyb3NvZnRhcGMtc2hhcmVwb2ludC1jb20tdGVhbXMtdGVzdC1zcC1zaXRlMSUyZlNoYXJlZCtEb2N1bWVudHMlMmZDb25uZWN0b3JfU3VtbWFyeS5wZGY=": "/sharepoint-export/https-microsoftapc-sharepoint-com-teams-test-sp-site1/Shared Documents/Connector_Summary.pdf"
+                                    }
+                                }
+                            }
+                        },
+                        "runAfter": {
+                            "Execute_a_SQL_query_(V2)_-_Get_file_metadata": [
+                                "SUCCEEDED"
+                            ]
+                        }
+                    }
+                },
+                "runAfter": {
+                    "Send_an_HTTP_request_to_SharePoint_-_Get_Recycle_Bin_Items": [
+                        "SUCCEEDED"
+                    ]
+                }
+            },
+            "Initialize_variable_-_file_blob_parent_path": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "file_blob_parent_path",
+                            "type": "string",
+                            "value": "''"
+                        }
+                    ]
+                },
+                "runAfter": {}
+            },
+            "Initialize_variable_-_file_blob_path": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "file_blob_path",
+                            "type": "string",
+                            "value": "''"
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Initialize_variable_-_file_blob_parent_path": [
+                        "SUCCEEDED"
+                    ]
+                }
+            }
+        },
+        "contentVersion": "1.0.0.0",
+        "outputs": {},
+        "triggers": {
+            "Recurrence_-_Every_day_or_xx_hours": {
+                "type": "Recurrence",
+                "recurrence": {
+                    "interval": 24,
+                    "frequency": "Hour"
+                }
+            }
+        }
+    },
+    "kind": "Stateful"
+}
